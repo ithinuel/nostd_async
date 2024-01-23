@@ -8,7 +8,7 @@ struct LinkedListLink<T>(Mutex<Cell<Option<NonNull<T>>>>);
 
 impl<T> LinkedListLink<T> {
     fn get(&self, cs: CriticalSection) -> Option<NonNull<T>> {
-        self.0.borrow(cs).get().clone()
+        self.0.borrow(cs).clone().get()
     }
 
     fn set(&self, cs: CriticalSection, value: Option<NonNull<T>>) {

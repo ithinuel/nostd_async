@@ -28,6 +28,15 @@ unsafe fn waker_drop(_context: *const ()) {}
 static RAW_WAKER_VTABLE: RawWakerVTable =
     RawWakerVTable::new(waker_clone, waker_wake, waker_wake_by_ref, waker_drop);
 
+fn with_cell<T: Default, U>(cell: &Mutex<Cell<T>>, f: impl FnOnce(&mut T) -> U) -> U {
+    critical_section::with(|cs| {
+        let mut v = cell.borrow(cs).take();
+        let u = f(&mut v);
+        cell.borrow(cs).set(v);
+        u
+    })
+}
+
 trait TaskHandle {
     fn poll_task(&self, cx: &mut Context) -> core::task::Poll<()>;
 }
@@ -80,13 +89,7 @@ impl<'a, T> JoinHandle<'a, T> {
     ///
     /// Returns the value returned by the future
     pub fn join(self) -> T {
-        while critical_section::with(|cs| {
-            let borrow = self.task_core.task_handle.borrow(cs);
-            let v = borrow.take();
-            let has_some = v.is_some();
-            borrow.set(v);
-            has_some
-        }) {
+        while with_cell(&self.task_core.task_handle, |v| v.is_some()) {
             unsafe { self.task_core.runtime.as_ref().run_once() };
         }
 
