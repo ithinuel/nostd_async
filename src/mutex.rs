@@ -3,24 +3,24 @@ use core::cell::UnsafeCell;
 use critical_section::CriticalSection;
 
 #[repr(transparent)]
-pub struct Mutex<T>(critical_section::Mutex<UnsafeCell<T>>);
+pub struct Mutex<T>(critical_section::Mutex<T>);
 
 impl<T> Mutex<T> {
     /// Creates a new Cell containing the given value.
     pub const fn new(value: T) -> Self {
-        Self(critical_section::Mutex::new(UnsafeCell::new(value)))
+        Self(critical_section::Mutex::new(value))
     }
 
     /// Sets the contained value.
     pub fn set(&self, cs: CriticalSection, value: T) {
-        unsafe { *self.0.borrow(cs).get() = value };
+        unsafe { *self.0.borrow(cs) = value };
     }
 }
 
 impl<T: Copy> Mutex<T> {
     /// Returns a copy of the contained value.
     pub fn get(&self, cs: CriticalSection) -> T {
-        unsafe { *self.0.borrow(cs).get() }
+        unsafe { *self.0.borrow(cs) }
     }
 }
 

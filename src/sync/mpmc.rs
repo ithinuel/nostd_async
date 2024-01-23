@@ -1,13 +1,13 @@
 use core::{
+    cell::Cell,
     future::Future,
     pin::Pin,
     task::{Context, Poll, Waker},
 };
 
-use crate::{
-    linked_list::{LinkedList, LinkedListItem, LinkedListLinks},
-    mutex::Mutex,
-};
+use critical_section::Mutex;
+
+use crate::linked_list::{LinkedList, LinkedListItem, LinkedListLinks};
 
 pub struct Buffer<'b, T> {
     senders: LinkedList<Send<'b, T>>,
@@ -48,8 +48,8 @@ impl<'b, T> Sender<'b, T> {
     pub fn send(&self, value: T) -> Send<'b, T> {
         Send {
             buffer: self.buffer,
-            value: Mutex::new(Some(value)),
-            waker: Mutex::new(None),
+            value: Mutex::new(Cell::new(Some(value))),
+            waker: Mutex::new(Cell::new(None)),
             links: LinkedListLinks::default(),
         }
     }
@@ -57,8 +57,8 @@ impl<'b, T> Sender<'b, T> {
 
 pub struct Send<'b, T> {
     buffer: &'b Buffer<'b, T>,
-    value: Mutex<Option<T>>,
-    waker: Mutex<Option<Waker>>,
+    value: Mutex<Cell<Option<T>>>,
+    waker: Mutex<Cell<Option<Waker>>>,
     links: LinkedListLinks<Self>,
 }
 
@@ -79,16 +79,20 @@ impl<'b, T> Future for Send<'b, T> {
         critical_section::with(|cs| {
             let this = unsafe { self.get_unchecked_mut() };
 
-            if this.value.has_none(cs) {
+            let value = this.value.borrow(cs).take();
+            let has_value = value.is_some();
+            this.value.borrow(cs).set(value);
+
+            if has_value {
                 this.remove(cs);
                 Poll::Ready(())
             } else {
                 this.insert_back(cs);
 
-                this.waker.set(cs, Some(cx.waker().clone()));
+                this.waker.borrow(cs).set(Some(cx.waker().clone()));
 
                 this.buffer.receivers.with_first(cs, |receiver| {
-                    if let Some(waker) = receiver.waker.take(cs) {
+                    if let Some(waker) = receiver.waker.borrow(cs).take() {
                         waker.wake();
                     }
                 });
@@ -112,7 +116,7 @@ impl<'b, T> Receiver<'b, T> {
     pub fn receive(&self) -> Receive<'b, T> {
         Receive {
             buffer: self.buffer,
-            waker: Mutex::new(None),
+            waker: Mutex::new(Cell::new(None)),
             links: LinkedListLinks::default(),
         }
     }
@@ -120,7 +124,7 @@ impl<'b, T> Receiver<'b, T> {
 
 pub struct Receive<'b, T> {
     buffer: &'b Buffer<'b, T>,
-    waker: Mutex<Option<Waker>>,
+    waker: Mutex<Cell<Option<Waker>>>,
     links: LinkedListLinks<Self>,
 }
 
@@ -142,8 +146,13 @@ impl<'b, T> Future for Receive<'b, T> {
             let this = unsafe { self.get_unchecked_mut() };
             match this.buffer.senders.with_first(cs, |sender| {
                 sender.remove(cs);
-                sender.waker.take(cs).expect("Sender has waker").wake();
-                sender.value.take(cs).expect("Sender has value")
+                sender
+                    .waker
+                    .borrow(cs)
+                    .take()
+                    .expect("Sender has waker")
+                    .wake();
+                sender.value.borrow(cs).take().expect("Sender has value")
             }) {
                 Some(value) => {
                     this.remove(cs);
@@ -151,7 +160,7 @@ impl<'b, T> Future for Receive<'b, T> {
                 }
                 None => {
                     this.insert_back(cs);
-                    this.waker.set(cs, Some(cx.waker().clone()));
+                    this.waker.borrow(cs).set(Some(cx.waker().clone()));
                     Poll::Pending
                 }
             }

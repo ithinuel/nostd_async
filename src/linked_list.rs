@@ -1,26 +1,28 @@
+use core::cell::Cell;
+use core::ptr::NonNull;
 use critical_section::CriticalSection;
 
-use crate::{mutex::Mutex, non_null::NonNull};
+use critical_section::Mutex;
 
-struct LinkedListLink<T>(Mutex<Option<NonNull<T>>>);
+struct LinkedListLink<T>(Mutex<Cell<Option<NonNull<T>>>>);
 
 impl<T> LinkedListLink<T> {
     fn get(&self, cs: CriticalSection) -> Option<NonNull<T>> {
-        self.0.get(cs)
+        self.0.borrow(cs).get().clone()
     }
 
     fn set(&self, cs: CriticalSection, value: Option<NonNull<T>>) {
-        self.0.set(cs, value)
+        self.0.borrow(cs).set(value);
     }
 
     fn take(&self, cs: CriticalSection) -> Option<NonNull<T>> {
-        self.0.take(cs)
+        self.0.borrow(cs).take()
     }
 }
 
 impl<T> Default for LinkedListLink<T> {
     fn default() -> Self {
-        Self(Mutex::default())
+        Self(Mutex::new(Default::default()))
     }
 }
 
@@ -52,7 +54,7 @@ impl<T> Clone for LinkedListCore<T> {
 impl<T> Copy for LinkedListCore<T> {}
 
 pub struct LinkedList<T> {
-    core: Mutex<Option<LinkedListCore<T>>>,
+    core: Mutex<Cell<Option<LinkedListCore<T>>>>,
 }
 
 impl<T> LinkedList<T> {
@@ -61,14 +63,15 @@ impl<T> LinkedList<T> {
         F: FnOnce(&T) -> R,
     {
         self.core
-            .get(cs)
+            .borrow(cs)
+            .get()
             .map(|core| f(unsafe { core.first.as_ref() }))
     }
 }
 
 impl<T: LinkedListItem> LinkedList<T> {
     pub fn pop_first(&self, cs: CriticalSection) -> Option<&T> {
-        self.core.get(cs).map(|core| {
+        self.core.borrow(cs).get().map(|core| {
             let first = unsafe { core.first.as_ref() };
             first.remove(cs);
             first
@@ -79,7 +82,7 @@ impl<T: LinkedListItem> LinkedList<T> {
 impl<T> Default for LinkedList<T> {
     fn default() -> Self {
         Self {
-            core: Mutex::default(),
+            core: Mutex::new(Default::default()),
         }
     }
 }
@@ -96,7 +99,8 @@ pub trait LinkedListItem: Sized {
             || self
                 .list()
                 .core
-                .get(cs)
+                .borrow(cs)
+                .get()
                 .map_or(false, |core| core::ptr::eq(core.first.as_ptr(), self))
     }
 
@@ -105,24 +109,21 @@ pub trait LinkedListItem: Sized {
             return self;
         }
 
-        let self_ptr = NonNull::new(self);
+        let self_ptr = NonNull::from(self);
 
-        let list = &self.list().core;
+        let list = &self.list().core.borrow(cs);
 
-        match list.get(cs) {
+        match list.get() {
             Some(mut core) => {
                 self.set_next(cs, Some(core.first));
                 unsafe { core.first.as_ref() }.set_previous(cs, Some(self_ptr));
                 core.first = self_ptr;
-                list.set(cs, Some(core));
+                list.set(Some(core));
             }
-            None => list.set(
-                cs,
-                Some(LinkedListCore {
-                    first: self_ptr,
-                    last: self_ptr,
-                }),
-            ),
+            None => list.set(Some(LinkedListCore {
+                first: self_ptr,
+                last: self_ptr,
+            })),
         }
 
         self
@@ -133,24 +134,21 @@ pub trait LinkedListItem: Sized {
             return self;
         }
 
-        let self_ptr = NonNull::new(self);
+        let self_ptr = NonNull::from(self);
 
-        let list = &self.list().core;
+        let list = &self.list().core.borrow(cs);
 
-        match list.get(cs) {
+        match list.get() {
             Some(mut core) => {
                 self.set_previous(cs, Some(core.last));
                 unsafe { core.last.as_ref() }.set_next(cs, Some(self_ptr));
                 core.last = self_ptr;
-                list.set(cs, Some(core));
+                list.set(Some(core));
             }
-            None => list.set(
-                cs,
-                Some(LinkedListCore {
-                    first: self_ptr,
-                    last: self_ptr,
-                }),
-            ),
+            None => list.set(Some(LinkedListCore {
+                first: self_ptr,
+                last: self_ptr,
+            })),
         }
 
         self
@@ -160,27 +158,23 @@ pub trait LinkedListItem: Sized {
         let self_ptr = self as *const Self;
 
         let links = self.links();
-        let list = &self.list().core;
+        let list = &self.list().core.borrow(cs);
 
         match (links.previous.take(cs), links.next.take(cs)) {
             (None, None) => {
                 // Possible not queued
-                if let Some(ends) = list.get(cs) {
+                if let Some(ends) = list.get() {
                     if core::ptr::eq(ends.first.as_ptr(), self_ptr) {
-                        list.set(cs, None);
+                        list.set(None);
                     }
                 }
             }
             (None, Some(next)) => {
                 // First in queue
-                let list = &self.list().core;
-                list.set(
-                    cs,
-                    Some(LinkedListCore {
-                        first: next,
-                        last: list.get(cs).expect("List is not empty").last,
-                    }),
-                );
+                list.set(Some(LinkedListCore {
+                    first: next,
+                    last: list.get().expect("List is not empty").last,
+                }));
                 unsafe { next.as_ref() }.set_previous(cs, None);
             }
             (Some(previous), Some(next)) => {
@@ -190,15 +184,10 @@ pub trait LinkedListItem: Sized {
             }
             (Some(previous), None) => {
                 // Last in queue
-
-                let list = &self.list().core;
-                list.set(
-                    cs,
-                    Some(LinkedListCore {
-                        first: list.get(cs).expect("List is not empty").first,
-                        last: previous,
-                    }),
-                );
+                list.set(Some(LinkedListCore {
+                    first: list.get().expect("List is not empty").first,
+                    last: previous,
+                }));
                 unsafe { previous.as_ref() }.set_next(cs, None);
             }
         }
@@ -229,7 +218,7 @@ mod tests {
     impl<'a> TestLinkedList<'a> {
         fn assert_is_valid(&self) {
             critical_section::with(|cs| unsafe {
-                if let Some(ends) = self.list.core.get(cs) {
+                if let Some(ends) = self.list.core.borrow(cs).get() {
                     assert!(ends.first.as_ref().links.previous.get(cs).is_none());
                     assert!(ends.last.as_ref().links.next.get(cs).is_none());
 
@@ -266,11 +255,11 @@ mod tests {
         }
 
         fn is_empty(&self) -> bool {
-            critical_section::with(|cs| self.list.core.get(cs).is_none())
+            critical_section::with(|cs| self.list.core.borrow(cs).get().is_none())
         }
 
         fn contains(&self, node: *const Node<'a>, cs: CriticalSection) -> bool {
-            if let Some(ends) = self.list.core.get(cs) {
+            if let Some(ends) = self.list.core.borrow(cs).get() {
                 let mut current_node = ends.first;
 
                 loop {
