@@ -6,7 +6,7 @@ pub fn main() {
         42
     });
 
-    let handle = task.spawn(&runtime);
+    let handle = runtime.spawn(&mut task);
 
     println!("{}", handle.join());
 }

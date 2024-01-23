@@ -10,8 +10,8 @@ pub fn main() {
         2
     });
 
-    let h1 = t1.spawn(&runtime);
-    let h2 = t2.spawn(&runtime);
+    let h1 = runtime.spawn(&mut t1);
+    let h2 = runtime.spawn(&mut t2);
 
     // Note that despice the fact that h2 is joined first, h1 runs first
     println!("Task 2: {}", h2.join());

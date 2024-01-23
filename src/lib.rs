@@ -2,17 +2,16 @@
 
 //!
 //! # Example
+//!
 //! ```
-//! let runtime = nostd_async::Runtime::new();
+//! use nostd_async::{Runtime, Task};
+//! let result = Runtime::new()
+//!     .spawn(&mut Task::new(async {
+//!         println!("Hello World");
+//!         42
+//!     })).join();
 //!
-//! let mut task = nostd_async::Task::new(async {
-//!     println!("Hello World");
-//!     42
-//! });
-//!
-//! let handle = task.spawn(&runtime);
-//!
-//! assert_eq!(handle.join(), 42);
+//! assert_eq!(result, 42);
 //! ```
 //! See more examples in the [examples directory](https://github.com/sammhicks/nostd_async/tree/master/examples)
 

@@ -19,8 +19,8 @@ pub fn main() {
     let mut t1 = task(1, 4);
     let mut t2 = task(2, 4);
 
-    let h1 = t1.spawn(&runtime);
-    let h2 = t2.spawn(&runtime);
+    let h1 = runtime.spawn(&mut t1);
+    let h2 = runtime.spawn(&mut t2);
 
     println!("Task 1: {}", h1.join());
     println!("Task 2: {}", h2.join());

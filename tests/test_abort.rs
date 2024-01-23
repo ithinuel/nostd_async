@@ -71,7 +71,7 @@ fn test_abort() {
             panic!("Should not reach here!");
         }));
 
-        let blocking_task_handle = blocking_task.spawn(&runtime);
+        let blocking_task_handle = runtime.spawn(&mut blocking_task);
 
         let mut long_task = nostd_async::Task::new(async {
             for entry in long_task_has_completed.iter_mut() {
@@ -80,13 +80,13 @@ fn test_abort() {
             }
         });
 
-        let long_task_handle = long_task.spawn(&runtime);
+        let long_task_handle = runtime.spawn(&mut long_task);
 
         let mut completing_task = nostd_async::Task::new(async {
             completing_task_has_completed = true;
         });
 
-        let completing_task_handle = completing_task.spawn(&runtime);
+        let completing_task_handle = runtime.spawn(&mut completing_task);
 
         completing_task_handle.join();
 

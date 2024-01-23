@@ -134,37 +134,6 @@ where
             },
         }
     }
-
-    /// Spawn the task into the given runtime.
-    /// Note that the task will not be run until a join handle is joined.
-    pub fn spawn(&'a mut self, runtime: &'a Runtime) -> JoinHandle<'a, F::Output> {
-        if self.core.is_some() {
-            panic!("Task already spawned");
-        }
-
-        let future = unsafe {
-            Mutex::new(Cell::new(Some(core::ptr::NonNull::from(
-                core::mem::transmute::<&mut (dyn TaskHandle + 'a), &mut dyn TaskHandle>(
-                    &mut self.future,
-                ),
-            ))))
-        };
-
-        let task_core = {
-            let task_core = self.core.get_or_insert(TaskCore {
-                task_handle: future,
-                runtime: NonNull::from(runtime),
-                links: LinkedListLinks::default(),
-            });
-
-            critical_section::with(move |cs| task_core.insert_back(cs))
-        };
-
-        JoinHandle {
-            task_core,
-            result: &self.future.result,
-        }
-    }
 }
 
 impl<F: Future> core::ops::Drop for Task<F> {
@@ -199,6 +168,37 @@ impl Runtime {
             cortex_m::asm::wfi();
             #[cfg(all(feature = "cortex_m", feature = "wfe"))]
             cortex_m::asm::wfe();
+        }
+    }
+
+    /// Spawn the task into the given runtime.
+    /// Note that the task will not be run until a join handle is joined.
+    pub fn spawn<'a, F: Future>(&'a self, task: &'a mut Task<F>) -> JoinHandle<'a, F::Output> {
+        if task.core.is_some() {
+            panic!("Task already spawned");
+        }
+
+        let future = unsafe {
+            Mutex::new(Cell::new(Some(core::ptr::NonNull::from(
+                core::mem::transmute::<&mut (dyn TaskHandle + 'a), &mut dyn TaskHandle>(
+                    &mut task.future,
+                ),
+            ))))
+        };
+
+        let task_core = {
+            let task_core = task.core.get_or_insert(TaskCore {
+                task_handle: future,
+                runtime: NonNull::from(self),
+                links: LinkedListLinks::default(),
+            });
+
+            critical_section::with(move |cs| task_core.insert_back(cs))
+        };
+
+        JoinHandle {
+            task_core,
+            result: &task.future.result,
         }
     }
 }
