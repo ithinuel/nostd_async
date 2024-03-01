@@ -41,16 +41,24 @@ trait TaskHandle {
     fn poll_task(&self, cx: &mut Context) -> core::task::Poll<()>;
 }
 
+#[derive(Default)]
+enum TaskState {
+    #[default]
+    None,
+    Running,
+    Pending(NonNull<dyn TaskHandle>),
+}
+
 struct TaskCore {
     runtime: NonNull<Runtime>,
-    task_handle: Mutex<Cell<Option<NonNull<dyn TaskHandle>>>>,
+    task_handle: Mutex<Cell<TaskState>>,
     links: LinkedListLinks<Self>,
 }
 
 impl TaskCore {
     fn run_once(&self) {
-        if let Some(mut task_handle) =
-            critical_section::with(|cs| self.task_handle.borrow(cs).take())
+        if let TaskState::Pending(mut task_handle) =
+            critical_section::with(|cs| self.task_handle.borrow(cs).replace(TaskState::Running))
         {
             let data = self as *const Self as *const ();
             let waker = unsafe { Waker::from_raw(RawWaker::new(data, &RAW_WAKER_VTABLE)) };
@@ -60,7 +68,11 @@ impl TaskCore {
                 .poll_task(&mut cx)
                 .is_pending()
             {
-                critical_section::with(|cs| self.task_handle.borrow(cs).set(Some(task_handle)));
+                critical_section::with(|cs| {
+                    self.task_handle
+                        .borrow(cs)
+                        .set(TaskState::Pending(task_handle))
+                });
             }
         }
     }
@@ -89,11 +101,15 @@ impl<'a, T> JoinHandle<'a, T> {
     ///
     /// Returns the value returned by the future
     pub fn join(self) -> T {
-        while with_cell(&self.task_core.task_handle, |v| v.is_some()) {
+        while with_cell(&self.task_core.task_handle, |v| {
+            !matches!(v, TaskState::None)
+        }) {
             unsafe { self.task_core.runtime.as_ref().run_once() };
         }
 
-        critical_section::with(|cs| self.result.borrow(cs).take().expect("No Result"))
+        let res = critical_section::with(|cs| self.result.borrow(cs).take());
+        defmt::info!("join: {:x}", &self.task_core.task_handle as *const _);
+        res.expect("No Result")
     }
 }
 
@@ -156,11 +172,15 @@ impl<F: Future> core::ops::Drop for Task<F> {
 pub struct Runtime {
     tasks: LinkedList<TaskCore>,
 }
+// SAFETY: Great care is taken to make it cross-core safe
+unsafe impl Sync for Runtime {}
 
 impl Runtime {
     // Create a new runtime
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self {
+            tasks: LinkedList::new(),
+        }
     }
 
     unsafe fn run_once(&self) {
@@ -182,7 +202,7 @@ impl Runtime {
         }
 
         let future = unsafe {
-            Mutex::new(Cell::new(Some(core::ptr::NonNull::from(
+            Mutex::new(Cell::new(TaskState::Pending(core::ptr::NonNull::from(
                 core::mem::transmute::<&mut (dyn TaskHandle + 'a), &mut dyn TaskHandle>(
                     &mut task.future,
                 ),
@@ -204,4 +224,10 @@ impl Runtime {
             result: &task.future.result,
         }
     }
+
+    //pub fn run(&self) {
+    //    while !critical_section::with(|cs| self.tasks.is_empty(cs)) {
+    //        unsafe { self.run_once() };
+    //    }
+    //}
 }

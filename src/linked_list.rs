@@ -58,6 +58,12 @@ pub struct LinkedList<T> {
 }
 
 impl<T> LinkedList<T> {
+    pub const fn new() -> Self {
+        Self {
+            core: Mutex::new(Cell::new(Option::None)),
+        }
+    }
+
     pub fn with_first<F, R>(&self, cs: CriticalSection, f: F) -> Option<R>
     where
         F: FnOnce(&T) -> R,
@@ -66,6 +72,11 @@ impl<T> LinkedList<T> {
             .borrow(cs)
             .get()
             .map(|core| f(unsafe { core.first.as_ref() }))
+    }
+
+    pub fn is_empty(&self, cs: CriticalSection) -> bool {
+        // does not empty the cell because LinkedListCore & Option implement Copy.
+        self.core.borrow(cs).get().is_some()
     }
 }
 
@@ -81,9 +92,7 @@ impl<T: LinkedListItem> LinkedList<T> {
 
 impl<T> Default for LinkedList<T> {
     fn default() -> Self {
-        Self {
-            core: Mutex::new(Default::default()),
-        }
+        Self::new()
     }
 }
 

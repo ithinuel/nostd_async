@@ -22,6 +22,7 @@ wfe = ["cortex-m"]
 [dependencies]
 cortex-m = { version = "0.7", optional = true }
 critical-section = "1.1.2"
+defmt = "0.3.5"
 
 [dev-dependencies]
 futures-micro = "0.5"
